@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+
+import requests
+import sys
+import time
+
+from measure import Measure, ST_FAILED
+
+DESC="Prometheus measure driver for Opsani Optune"
+VERSION="1.0.0"
+HAS_CANCEL=True
+PROGRESS_INTERVAL=30
+
+
+PROM_API_PATH = '/api/v1/'
+
+class Prom(Measure):
+
+    # overwrites super
+    def describe(self):
+        base_url = "http://localhost:9090/" # TODO: FIXME: TEMP
+
+        url = '%s%slabel/__name__/values'%(base_url, PROM_API_PATH)
+
+        self.debug("Getting url: ", url)
+        r = requests.get(url)
+
+        assert r.status_code == 200, \
+            'Prometheus server returned http code: ' + str(r.status_code)
+
+        try:
+            data = r.json()
+        except:
+            raise Exception('Failed to parse Prometheus JSON response')
+
+
+        self.debug("Got reponse data: ", data)
+
+        assert 'status' in data and  data['status'] == 'success', \
+            "Prometheus server did not return status success"
+
+        assert 'data' in data, \
+            "Prometheus server did not return data in output"
+
+        assert len(data['data']) > 0, \
+            "Prometheus server returned no metrics"
+
+
+        metrics = {m:{} for m in data['data']}
+
+        return metrics
+
+
+    # overwrites super
+    def handle_cancel(self, signal, frame):
+        err = "Exiting due to signal: %s"%signal
+        self.print_measure_error(err, ST_FAILED)
+        sys.exit(3)
+
+    # overwrites super
+    def measure(self):
+
+        # valcheck
+        try:
+            base_url = self.input_data['control']['userdata']['prom_base_url']
+        except:
+            raise Exception('Input configuration is missing "prom_base_url"')
+
+        base_url = base_url[:-1] if base_url.endswith('/') else base_url
+
+        try:
+            in_metrics = self.input_data['metrics']
+        except:
+            raise Exception('Input configuration is missing "metrics"')
+
+        if not isinstance(in_metrics,dict) or len(in_metrics.keys()) != 1:
+            raise Exception('Invalid format of metrics in input configuration, must specify exactly one metric.')
+
+        metric_name = list(in_metrics.keys())[0]
+
+        try:
+            metric_query = in_metrics[metric_name]["query"]
+        except:
+            raise Exception(
+                'Input configuration for metric "%s" has invalid query'%(
+                metric_name))
+
+        try:
+            warmup = int(self.input_data['control']['warmup'])
+        except:
+            warmup = 0
+
+        try:
+            duration = int(self.input_data['control']['duration'])
+        except:
+            raise Exception('Control configuration is missing "duration"')
+
+        # Query metric to make sure it exists
+        try:
+            m_value = self._query_prom(base_url, metric_query)
+            self.debug(
+                "Initial value for metric %s: %s"%(metric_query, m_value))
+        except Exception as e:
+            raise Exception(
+                'Failed to query Prometheus for metric: %s. Error: %s'%(
+                    metric_query, str(e)))
+
+        # sleep
+        self.t_sleep = warmup + duration
+        self.debug('Sleeping for %d seconds (%d warmup + %d duration)'%(
+            self.t_sleep, warmup, duration))
+        time.sleep(self.t_sleep)
+
+        # measure
+        m_value = self._query_prom(base_url, metric_query)
+
+        metrics = {
+            metric_name: {
+                'value' : m_value,
+                'annotation': metric_query,
+            }
+        }
+
+        annotations = {
+            'prometheus_base_url': base_url,
+        }
+
+        return (metrics, annotations)
+
+    # Overwrite so it updates progress before printing it
+    def print_progress(
+            self,
+            message=None,
+            msg_index=None,
+            stage=None,
+            stageprogress=None):
+
+        # Update progress based on how much time has elapsed
+        t_taken = time.time() - self.t_measure_start
+        self.progress = int(100*((t_taken)/self.t_sleep))
+
+        super().print_progress(message, msg_index, stage, stageprogress)
+
+
+    # helper
+    def _query_prom(self, base_url, metric_query):
+
+        url = '%s%squery?query=%s'%(base_url, PROM_API_PATH, metric_query)
+
+        self.debug("Getting url: ", url)
+        r = requests.get(url)
+
+        assert r.status_code == 200, \
+            'Prometheus server returned http code: ' + str(r.status_code)
+
+        try:
+            data = r.json()
+        except:
+            raise Exception('Failed to parse Prometheus JSON response')
+
+        self.debug("Got reponse data: ", data)
+
+        assert 'status' in data and data['status'] == 'success', \
+            "Prometheus server did not return status success"
+
+        for i in data['data']['result']:
+            if 'metric' in i and 'code' in i['metric'] and \
+                    i['metric']['code'] == '200':
+                return float(i['value'][1])
+
+        raise Exception("Failed to find metrics data in Prometheus response" +  str(data))
+
+
+if __name__ == '__main__':
+    prom = Prom(VERSION, DESC, HAS_CANCEL, PROGRESS_INTERVAL)
+    prom.run()
