@@ -11,14 +11,14 @@ VERSION="1.0.0"
 HAS_CANCEL=True
 PROGRESS_INTERVAL=30
 
-
+PROM_BASE_URL = os.getenv('PROMETHEUS_ENDPOINT', 'http://prometheus:9090/metrics')
 PROM_API_PATH = '/api/v1/'
 
 class Prom(Measure):
 
     # overwrites super
     def describe(self):
-        base_url = "http://localhost:9090/" # TODO: FIXME: TEMP
+        base_url = PROM_BASE_URL
 
         url = '%s%slabel/__name__/values'%(base_url, PROM_API_PATH)
 
