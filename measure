@@ -1,24 +1,67 @@
 #!/usr/bin/env python3
 
-import requests
 import sys
 import os
 import time
 
+import requests
+import yaml
+
 from measure import Measure, ST_FAILED
 
-DESC="Prometheus measure driver for Opsani Optune"
-VERSION="1.0.0"
+DESC="Prometheus measure driver for Optune by Opsani"
+VERSION="1.1.0"
 HAS_CANCEL=True
 PROGRESS_INTERVAL=30
 
-PROM_BASE_URL = os.getenv('PROMETHEUS_ENDPOINT', 'http://prometheus:9090/metrics')
+CONFIG_FPATH  = os.getenv('CONFIG_FPATH', './config.yaml')
+
+PROM_BASE_URL = os.getenv('PROMETHEUS_ENDPOINT', 'http://prometheus:9090')
 PROM_API_PATH = '/api/v1/'
 
 class Prom(Measure):
 
-    # overwrites super
-    def describe(self):
+    @staticmethod
+    def get_config(path=CONFIG_FPATH):
+        # read and parse config
+        try:
+            config = yaml.safe_load(open(path))['prom']
+            assert config and config.get('metrics'), 'No metrics has been provided at path "prom.metrics" ' \
+                                                     'in file located at {}'.format(path)
+        except yaml.YAMLError as e:
+            e.__cause__ = 'Error parsing config file located at {}: {}'.format(path, e.__cause__)
+            raise
+        except KeyError:
+            raise KeyError('No `prom` configuration has been provided in config file located '
+                           'at {}'.format(path))
+
+        # validate config
+        bad_top_keys = config.keys() - {'metrics'}
+        if bad_top_keys:
+            raise Exception('Unknown top level key(s) in `prom` section of file {}: {}'.format(path, bad_top_keys))
+        metrics = config['metrics']
+        assert isinstance(metrics, dict), 'The `metrics` attribute in `prom` section must be a dict'
+        for m, mdesc in config['metrics'].items():
+            assert isinstance(m, str), 'Metric name `{}` must be a string, found {}'.format(m, type(m).__name__)
+            if not isinstance(mdesc, dict):
+                raise Exception('Metric `{}` data in file {} must be a dict, found {}'.
+                    format(m, path, type(mdesc).__name__))
+            bad_keys = mdesc.keys() - {'query', 'unit'}
+            if bad_keys:
+                raise Exception('Unknown attributes for metric `{}` in `prom` section of file {}: {}'.
+                    format(m, path, bad_keys))
+            if 'query' not in mdesc:
+                raise Exception('Missing `query` attribute for metric `{}` in `prom` section of file {}'.format(m, path))
+            if not isinstance(mdesc['query'], str):                
+                raise Exception('Query for metric `{}` must be string, found {}'.format(m, type(mdesc['query']).__name__))
+
+        return config
+
+    def get_prom_metrics(self):
+        '''
+        Get metrics known to Prometheus's endpoint
+        (Currently not used)
+        '''
         base_url = PROM_BASE_URL
 
         url = '%s%slabel/__name__/values'%(base_url, PROM_API_PATH)
@@ -34,10 +77,9 @@ class Prom(Measure):
         except:
             raise Exception('Failed to parse Prometheus JSON response')
 
-
         self.debug("Got reponse data: ", data)
 
-        assert 'status' in data and  data['status'] == 'success', \
+        assert 'status' in data and data['status'] == 'success', \
             "Prometheus server did not return status success"
 
         assert 'data' in data, \
@@ -46,11 +88,22 @@ class Prom(Measure):
         assert len(data['data']) > 0, \
             "Prometheus server returned no metrics"
 
+        known_metrics = data['data']
+        assert isinstance(known_metrics, list)
 
-        metrics = {m:{} for m in data['data']}
+    # overwrites super
+    def describe(self):
+        cfg = self.get_config()
+
+        # construct response using configured metrics
+        metrics = dict()
+        for m, mdesc in cfg['metrics'].items():
+            d = dict()
+            if 'unit' in mdesc:
+                d['unit'] = mdesc['unit']
+            metrics[m] = d
 
         return metrics
-
 
     # overwrites super
     def handle_cancel(self, signal, frame):
@@ -60,27 +113,24 @@ class Prom(Measure):
 
     # overwrites super
     def measure(self):
+        cfg = self.get_config()
 
-        # valcheck
-        try:
-            base_url = self.input_data['control']['userdata']['prom_base_url']
-        except:
-            raise Exception('Input configuration is missing "prom_base_url"')
+        # get Prometheus API URL with no trailing '/'
+        base_url = PROM_BASE_URL # default or from env var
+        base_url.rstrip('/')
 
-        base_url = base_url[:-1] if base_url.endswith('/') else base_url
-
+        # get metrics to be collected
         try:
             in_metrics = self.input_data['metrics']
         except:
             raise Exception('Input configuration is missing "metrics"')
+        if not isinstance(in_metrics, list) or len(in_metrics) != 1:
+            raise Exception('Invalid list of metrics in input configuration, must specify exactly one metric.')
+        metric_name = list(in_metrics)[0]
 
-        if not isinstance(in_metrics,dict) or len(in_metrics.keys()) != 1:
-            raise Exception('Invalid format of metrics in input configuration, must specify exactly one metric.')
-
-        metric_name = list(in_metrics.keys())[0]
-
+        # lookup metric query in configuration
         try:
-            metric_query = in_metrics[metric_name]["query"]
+            metric_query = cfg['metrics'][metric_name]["query"]
         except:
             raise Exception(
                 'Input configuration for metric "%s" has invalid query'%(
