@@ -124,17 +124,35 @@ class Prom(Measure):
             in_metrics = self.input_data['metrics']
         except:
             raise Exception('Input configuration is missing "metrics"')
-        if not isinstance(in_metrics, list) or len(in_metrics) != 1:
+        if not isinstance(in_metrics, list) or not in_metrics:
             raise Exception('Invalid list of metrics in input configuration, must specify exactly one metric.')
-        metric_name = list(in_metrics)[0]
 
-        # lookup metric query in configuration
-        try:
-            metric_query = cfg['metrics'][metric_name]["query"]
-        except:
-            raise Exception(
-                'Input configuration for metric "%s" has invalid query'%(
-                metric_name))
+        def gather_metrics(metric_names, start, end):
+            metrics = {}
+            for metric_name in metric_names:
+
+                # lookup metric query in configuration
+                try:
+                    metric_query = cfg['metrics'][metric_name]["query"]
+                except:
+                    raise Exception('Input configuration for metric "%s" has invalid query'%(metric_name))
+
+                # Query metric to make sure it exists
+                try:
+                    m_values = self._query_prom(base_url, metric_query, start, end)
+                    self.debug("Initial value for metric %s: %s"%(metric_query, m_values))
+                except Exception as e:
+                    raise Exception('Failed to query Prometheus for metric: %s. Error: %s'%(metric_query, str(e)))
+
+                metrics.update({
+                    metric_name: {
+                        'values' : m_values,
+                        'annotation': metric_query,
+                    }
+                })
+            return metrics
+
+        gather_metrics(in_metrics, time.time() - 600, time.time())
 
         try:
             warmup = int(self.input_data['control']['warmup'])
@@ -146,34 +164,18 @@ class Prom(Measure):
         except:
             raise Exception('Control configuration is missing "duration"')
 
-        # Query metric to make sure it exists
-        try:
-            m_value = self._query_prom(base_url, metric_query)
-            self.debug(
-                "Initial value for metric %s: %s"%(metric_query, m_value))
-        except Exception as e:
-            raise Exception(
-                'Failed to query Prometheus for metric: %s. Error: %s'%(
-                    metric_query, str(e)))
+        delay = int(self.input_data['control'].get('delay', 0))
 
+        start = time.time() + warmup
         # sleep
-        self.t_sleep = warmup + duration
+        self.t_sleep = warmup + duration + delay
         self.debug('Sleeping for %d seconds (%d warmup + %d duration)'%(
             self.t_sleep, warmup, duration))
         time.sleep(self.t_sleep)
 
-        # measure
-        m_value = self._query_prom(base_url, metric_query)
-
-        metrics = {
-            metric_name: {
-                'value' : m_value,
-                'annotation': metric_query,
-            }
-        }
-
+        metrics = gather_metrics(in_metrics, start, start + duration)
         annotations = {
-            'prometheus_base_url': base_url,
+            # 'prometheus_base_url': base_url,
         }
 
         return (metrics, annotations)
@@ -194,9 +196,9 @@ class Prom(Measure):
 
 
     # helper
-    def _query_prom(self, base_url, metric_query):
+    def _query_prom(self, base_url, metric_query, start, end):
 
-        url = '%s%squery?query=%s'%(base_url, PROM_API_PATH, metric_query)
+        url = '%s%squery_range?query=%s&start=%s&end=%s&step=60'%(base_url, PROM_API_PATH, metric_query, start, end)
 
         self.debug("Getting url: ", url)
         r = requests.get(url)
@@ -214,12 +216,17 @@ class Prom(Measure):
         assert 'status' in data and data['status'] == 'success', \
             "Prometheus server did not return status success"
 
+        insts = []
         for i in data['data']['result']:
-            if 'metric' in i and 'code' in i['metric'] and \
-                    i['metric']['code'] == '200':
-                return float(i['value'][1])
-
-        raise Exception("Failed to find metrics data in Prometheus response" +  str(data))
+            metric = i['metric'].copy()
+            if '__name__' in metric:
+                del metric['__name__']
+            id = '   '.join(map(lambda m: ':'.join(m), sorted(metric.items(), key=lambda m: m[0])))
+            values = map(lambda v: (v[0], float(v[1]) if '.' in v[1] else int(v[1])), i['values'])
+            insts.append(dict(id=id, data=list(values)))
+        if not insts:
+            raise Exception("Failed to find metrics data in Prometheus response " +  str(data))
+        return insts
 
 
 if __name__ == '__main__':
