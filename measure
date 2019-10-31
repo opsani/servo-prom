@@ -142,7 +142,10 @@ class Prom(Measure):
                     m_values = self._query_prom(base_url, metric_query, start, end)
                     self.debug("Initial value for metric %s: %s"%(metric_query, m_values))
                 except Exception as e:
-                    raise Exception('Failed to query Prometheus for metric: %s. Error: %s'%(metric_query, str(e)))
+                    # raise Exception('Failed to query Prometheus for metric: %s. Error: %s'%(metric_query, str(e)))
+                    # Due to the way Prometheus reports metrics that was not collected yet, we should pass here
+                    # instead or raising an exception
+                    continue
 
                 metrics.update({
                     metric_name: {
