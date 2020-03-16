@@ -9,86 +9,112 @@ import yaml
 
 from measure import Measure, ST_FAILED
 
-DESC="Prometheus measure driver for Optune by Opsani"
-VERSION="1.1.0"
-HAS_CANCEL=True
-PROGRESS_INTERVAL=30
+DESC = "Prometheus measure driver for Optune by Opsani"
+VERSION = "1.1.0"
+HAS_CANCEL = True
+PROGRESS_INTERVAL = 30
 
-CONFIG_FPATH  = os.getenv('CONFIG_FPATH', './config.yaml')
+CONFIG_FPATH = os.getenv("CONFIG_FPATH", "./config.yaml")
 
-PROM_BASE_URL = os.getenv('PROMETHEUS_ENDPOINT', 'http://prometheus:9090')
-PROM_API_PATH = '/api/v1/'
+PROM_BASE_URL = os.getenv("PROMETHEUS_ENDPOINT", "http://prometheus:9090")
+PROM_API_PATH = "/api/v1/"
+
 
 class Prom(Measure):
-
     @staticmethod
     def get_config(path=CONFIG_FPATH):
         # read and parse config
+
+        # Load configuration from "prom" section of the config file, unless
+        #   PROMETHEUS_USE_DRIVER_NAME environment variable is defined. Use config
+        #   defined in section matching driver name in that case.
+        driver_key = "prom"
+        if os.environ.get('PROMETHEUS_USE_DRIVER_NAME', False):
+            driver_key = os.path.basename(__file__)
         try:
-            config = yaml.safe_load(open(path))['prom']
-            assert config and config.get('metrics'), 'No metrics has been provided at path "prom.metrics" ' \
-                                                     'in file located at {}'.format(path)
+            config = yaml.safe_load(open(path))[driver_key]
+            assert config and config.get("metrics"), 'No metrics has been provided at path "{}.metrics" in file located at {}"'.format(driver_key, path)
         except yaml.YAMLError as e:
-            e.__cause__ = 'Error parsing config file located at {}: {}'.format(path, e.__cause__)
+            e.__cause__ = "Error parsing config file located at {}: {}".format(
+                path, e.__cause__
+            )
             raise
         except KeyError:
-            raise KeyError('No `prom` configuration has been provided in config file located '
-                           'at {}'.format(path))
+            raise KeyError("No `{}` configuration has been provided in config file located at {}".format(driver_key, path))
 
         # validate config
-        bad_top_keys = config.keys() - {'metrics'}
+        bad_top_keys = config.keys() - {"metrics", "prometheus_endpoint"}
         if bad_top_keys:
-            raise Exception('Unknown top level key(s) in `prom` section of file {}: {}'.format(path, bad_top_keys))
-        metrics = config['metrics']
-        assert isinstance(metrics, dict), 'The `metrics` attribute in `prom` section must be a dict'
-        for m, mdesc in config['metrics'].items():
-            assert isinstance(m, str), 'Metric name `{}` must be a string, found {}'.format(m, type(m).__name__)
+            raise Exception("Unknown top level key(s) in `{}` section of file {}: {}".format(driver_key, path, bad_top_keys))
+
+        # Validate prometheus_endpoint, if present
+        if "prometheus_endpoint" in config:
+            if not isinstance(config["prometheus_endpoint"], str):
+                raise Exception("'prometheus_endpoint' in '{}' section must be a string".format(driver_key))
+            if not config["prometheus_endpoint"]:
+                raise Exception("'prometheus_endpoint' in '{}' section must not be empty".format(driver_key))
+
+        metrics = config["metrics"]
+        assert isinstance(metrics, dict), "The `metrics` attribute in `{}` section must be a dict".format(driver_key)
+        for m, mdesc in config["metrics"].items():
+            assert isinstance(m, str), "Metric name `{}` must be a string, found {}".format(m, type(m).__name__)
             if not isinstance(mdesc, dict):
-                raise Exception('Metric `{}` data in file {} must be a dict, found {}'.
-                    format(m, path, type(mdesc).__name__))
-            bad_keys = mdesc.keys() - {'query', 'unit'}
+                raise Exception(
+                    "Metric `{}` data in file {} must be a dict, found {}".format(
+                        m, path, type(mdesc).__name__
+                    )
+                )
+            bad_keys = mdesc.keys() - {"query", "unit"}
             if bad_keys:
-                raise Exception('Unknown attributes for metric `{}` in `prom` section of file {}: {}'.
-                    format(m, path, bad_keys))
-            if 'query' not in mdesc:
-                raise Exception('Missing `query` attribute for metric `{}` in `prom` section of file {}'.format(m, path))
-            if not isinstance(mdesc['query'], str):                
-                raise Exception('Query for metric `{}` must be string, found {}'.format(m, type(mdesc['query']).__name__))
+                raise Exception(
+                    "Unknown attributes for metric `{}` in `{}` section of file {}: {}".format(driver_key, m, path,
+                                                                                               bad_keys))
+            if "query" not in mdesc:
+                raise Exception(
+                    "Missing `query` attribute for metric `{}` in `{}` section of file {}".format(
+                        driver_key, m, path
+                    )
+                )
+            if not isinstance(mdesc["query"], str):
+                raise Exception(
+                    "Query for metric `{}` must be string, found {}".format(
+                        m, type(mdesc["query"]).__name__
+                    )
+                )
 
-        return config
+            return config
 
-    def get_prom_metrics(self):
-        '''
-        Get metrics known to Prometheus's endpoint
-        (Currently not used)
-        '''
-        base_url = PROM_BASE_URL
+        def get_prom_metrics(self):
+            """
+            Get metrics known to Prometheus's endpoint
+            (Currently not used)
+            """
+            base_url = self.get_config().get("prometheus_endpoint", PROM_BASE_URL).rstrip("/")
 
-        url = '%s%slabel/__name__/values'%(base_url, PROM_API_PATH)
+            url = "%s%slabel/__name__/values" % (base_url, PROM_API_PATH)
 
-        self.debug("Getting url: ", url)
-        r = requests.get(url)
+            self.debug("Getting url: ", url)
+            r = requests.get(url)
 
-        assert r.status_code == 200, \
-            'Prometheus server returned http code: ' + str(r.status_code)
+            assert r.status_code == 200, "Prometheus server returned http code: "
+            + str(r.status_code)
 
         try:
             data = r.json()
         except:
-            raise Exception('Failed to parse Prometheus JSON response')
+            raise Exception("Failed to parse Prometheus JSON response")
 
         self.debug("Got reponse data: ", data)
 
-        assert 'status' in data and data['status'] == 'success', \
-            "Prometheus server did not return status success"
+        assert (
+                "status" in data and data["status"] == "success"
+        ), "Prometheus server did not return status success"
 
-        assert 'data' in data, \
-            "Prometheus server did not return data in output"
+        assert "data" in data, "Prometheus server did not return data in output"
 
-        assert len(data['data']) > 0, \
-            "Prometheus server returned no metrics"
+        assert len(data["data"]) > 0, "Prometheus server returned no metrics"
 
-        known_metrics = data['data']
+        known_metrics = data["data"]
         assert isinstance(known_metrics, list)
 
     # overwrites super
@@ -97,17 +123,17 @@ class Prom(Measure):
 
         # construct response using configured metrics
         metrics = dict()
-        for m, mdesc in cfg['metrics'].items():
+        for m, mdesc in cfg["metrics"].items():
             d = dict()
-            if 'unit' in mdesc:
-                d['unit'] = mdesc['unit']
+            if "unit" in mdesc:
+                d["unit"] = mdesc["unit"]
             metrics[m] = d
 
         return metrics
 
     # overwrites super
     def handle_cancel(self, signal, frame):
-        err = "Exiting due to signal: %s"%signal
+        err = "Exiting due to signal: %s" % signal
         self.print_measure_error(err, ST_FAILED)
         sys.exit(3)
 
@@ -116,16 +142,17 @@ class Prom(Measure):
         cfg = self.get_config()
 
         # get Prometheus API URL with no trailing '/'
-        base_url = PROM_BASE_URL # default or from env var
-        base_url.rstrip('/')
+        base_url = cfg.get("prometheus_endpoint", PROM_BASE_URL).rstrip("/")
 
         # get metrics to be collected
         try:
-            in_metrics = self.input_data['metrics']
+            in_metrics = self.input_data["metrics"]
         except:
             raise Exception('Input configuration is missing "metrics"')
         if not isinstance(in_metrics, list) or not in_metrics:
-            raise Exception('Invalid list of metrics in input configuration, must specify exactly one metric.')
+            raise Exception(
+                "Invalid list of metrics in input configuration, must specify exactly one metric."
+            )
 
         def gather_metrics(metric_names, start, end):
             metrics = {}
@@ -133,47 +160,53 @@ class Prom(Measure):
 
                 # lookup metric query in configuration
                 try:
-                    metric_query = cfg['metrics'][metric_name]["query"]
+                    if cfg["metrics"].get(metric_name, None) is None:
+                        # metric is missing in config, skipping due to the bug in OCO asking for derived metrics
+                        continue
+                    metric_query = cfg["metrics"][metric_name]["query"]
                 except:
-                    raise Exception('Input configuration for metric "%s" has invalid query'%(metric_name))
+                    raise Exception(
+                        'Input configuration for metric "%s" has invalid query'
+                        % (metric_name)
+                    )
 
                 # Query metric to make sure it exists
                 try:
                     m_values = self._query_prom(base_url, metric_query, start, end)
-                    self.debug("Initial value for metric %s: %s"%(metric_query, m_values))
+                    self.debug(
+                        "Initial value for metric %s: %s" % (metric_query, m_values)
+                    )
                 except Exception as e:
-                    # raise Exception('Failed to query Prometheus for metric: %s. Error: %s'%(metric_query, str(e)))
-                    # Due to the way Prometheus reports metrics that was not collected yet, we should pass here
-                    # instead or raising an exception
-                    continue
+                    raise Exception(
+                        "Failed to query Prometheus for metric: %s. Error: %s"
+                        % (metric_query, str(e))
+                    )
 
-                metrics.update({
-                    metric_name: {
-                        'values' : m_values,
-                        'annotation': metric_query,
-                    }
-                })
+                metrics.update(
+                    {metric_name: {"values": m_values, "annotation": metric_query, }}
+                )
             return metrics
 
         gather_metrics(in_metrics, time.time() - 600, time.time())
 
         try:
-            warmup = int(self.input_data['control']['warmup'])
+            warmup = int(self.input_data["control"]["warmup"])
         except:
             warmup = 0
 
         try:
-            duration = int(self.input_data['control']['duration'])
+            duration = int(self.input_data["control"]["duration"])
         except:
             raise Exception('Control configuration is missing "duration"')
 
-        delay = int(self.input_data['control'].get('delay', 0))
+        delay = int(self.input_data["control"].get("delay", 0))
 
         start = time.time() + warmup
         # sleep
         self.t_sleep = warmup + duration + delay
-        self.debug('Sleeping for %d seconds (%d warmup + %d duration)'%(
-            self.t_sleep, warmup, duration))
+        self.debug("Sleeping for %d seconds (%d warmup + %d duration)"
+                   % (self.t_sleep, warmup, duration)
+                   )
         time.sleep(self.t_sleep)
 
         metrics = gather_metrics(in_metrics, start, start + duration)
@@ -184,54 +217,78 @@ class Prom(Measure):
         return (metrics, annotations)
 
     # Overwrite so it updates progress before printing it
-    def print_progress(
-            self,
-            message=None,
-            msg_index=None,
-            stage=None,
-            stageprogress=None):
-
+    def print_progress(self, message=None, msg_index=None, stage=None, stageprogress=None):
         # Update progress based on how much time has elapsed
         t_taken = time.time() - self.t_measure_start
-        self.progress = int(100*((t_taken)/self.t_sleep))
+        self.progress = int(100 * ((t_taken) / self.t_sleep))
 
         super().print_progress(message, msg_index, stage, stageprogress)
-
 
     # helper
     def _query_prom(self, base_url, metric_query, start, end):
 
-        url = '%s%squery_range?query=%s&start=%s&end=%s&step=60'%(base_url, PROM_API_PATH, metric_query, start, end)
+        url = "%s%squery_range?query=%s&start=%s&end=%s&step=60" % (
+            base_url,
+            PROM_API_PATH,
+            metric_query,
+            start,
+            end,
+        )
 
         self.debug("Getting url: ", url)
         r = requests.get(url)
 
-        assert r.status_code == 200, \
-            'Prometheus server returned http code: ' + str(r.status_code)
+        assert r.status_code == 200, "Prometheus server returned http code: " + str(
+            r.status_code
+        )
 
         try:
             data = r.json()
         except:
-            raise Exception('Failed to parse Prometheus JSON response')
+            raise Exception("Failed to parse Prometheus JSON response")
 
-        self.debug("Got reponse data: ", data)
+        self.debug("Got response data: ", data)
 
-        assert 'status' in data and data['status'] == 'success', \
-            "Prometheus server did not return status success"
+        assert (
+                "status" in data and data["status"] == "success"
+        ), "Prometheus server did not return status success"
 
         insts = []
-        for i in data['data']['result']:
-            metric = i['metric'].copy()
-            if '__name__' in metric:
-                del metric['__name__']
-            id = '   '.join(map(lambda m: ':'.join(m), sorted(metric.items(), key=lambda m: m[0])))
-            values = map(lambda v: (v[0], float(v[1]) if '.' in v[1] else int(v[1])), i['values'])
+        for i in data["data"]["result"]:
+            metric = i["metric"].copy()
+            if "__name__" in metric:
+                del metric["__name__"]
+            id = "   ".join(
+                map(lambda m: ":".join(m), sorted(metric.items(), key=lambda m: m[0]))
+            )
+            # values = map(
+            #     lambda v: (v[0], float(v[1]) if "." in v[1] else int(v[1])), i["values"]
+            # )
+            values = []
+            for item in i["values"]:
+                try:
+                    if "." in item[1]:
+                        d = float(item[1])
+                    elif item[1] == 'NaN':
+                        # d = None
+                        continue
+                    else:
+                        d = int(item[1])
+                except ValueError:
+                    # d = None
+                    continue
+                values.append((item[0], d))
             insts.append(dict(id=id, data=list(values)))
+
         if not insts:
-            raise Exception("Failed to find metrics data in Prometheus response " +  str(data))
+            return []
+            # raise Exception(
+            #    "Failed to find metrics data in Prometheus response " + str(data)
+            # )
         return insts
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     prom = Prom(VERSION, DESC, HAS_CANCEL, PROGRESS_INTERVAL)
     prom.run()
+
