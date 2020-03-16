@@ -10,7 +10,7 @@ import yaml
 from measure import Measure, ST_FAILED
 
 DESC = "Prometheus measure driver for Optune by Opsani"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 HAS_CANCEL = True
 PROGRESS_INTERVAL = 30
 
