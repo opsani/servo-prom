@@ -10,7 +10,7 @@ Optune servo driver for Prometheus
 3. Alternatively, Prometheus endpoint may be specified in `prometheus_endpoint` key
    of driver configuration. If this key exists and is not empty, value specified will
    override `PROMETHEUS_ENDPOINT`.
-4. If environment variable `PROMETHEUS_USE_DRIVER_NAME` is set to True, then 
+4. If environment variable `PROMETHEUS_USE_DRIVER_NAME` is set to "1", then 
    the driver will use configuration matching driver filename in config.yaml instead
    of a standard `prom`. This allows querying multiple Prometheus server via `servo-magg`
    driver.
