@@ -270,12 +270,10 @@ class Prom(Measure):
                     if "." in item[1]:
                         d = float(item[1])
                     elif item[1] == 'NaN':
-                        # d = None
                         continue
                     else:
                         d = int(item[1])
                 except ValueError:
-                    # d = None
                     continue
                 values.append((item[0], d))
             insts.append(dict(id=id, data=list(values)))
