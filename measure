@@ -29,7 +29,8 @@ class Prom(Measure):
         #   PROMETHEUS_USE_DRIVER_NAME environment variable is defined. Use config
         #   defined in section matching driver name in that case.
         driver_key = "prom"
-        if os.environ.get('PROMETHEUS_USE_DRIVER_NAME', False):
+        prometheus_use_driver_name = os.environ.get('PROMETHEUS_USE_DRIVER_NAME', False)
+        if prometheus_use_driver_name and str(prometheus_use_driver_name) == '1':
             driver_key = os.path.basename(__file__)
         try:
             config = yaml.safe_load(open(path))[driver_key]
