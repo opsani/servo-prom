@@ -14,6 +14,10 @@ Optune servo driver for Prometheus
    the driver will use configuration matching driver filename in config.yaml instead
    of a standard `prom`. This allows querying multiple Prometheus server via `servo-magg`
    driver.
+5. Parameter `period` of the query definition specifies step for `query_range` function.
+   Default period is 60s. If `rate` or similar function is used, time period for it 
+   should match the `period` parameter.
+   
 
 **Notes**
 * You can define multiple metrics.
