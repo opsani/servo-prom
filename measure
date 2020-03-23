@@ -65,7 +65,7 @@ class Prom(Measure):
                         m, path, type(mdesc).__name__
                     )
                 )
-            bad_keys = mdesc.keys() - {"query", "unit"}
+            bad_keys = mdesc.keys() - {"query", "unit", "period"}
             if bad_keys:
                 raise Exception(
                     "Unknown attributes for metric `{}` in `{}` section of file {}: {}".format(driver_key, m, path,
@@ -83,22 +83,21 @@ class Prom(Measure):
                     )
                 )
 
-            return config
+        return config
 
-        def get_prom_metrics(self):
-            """
-            Get metrics known to Prometheus's endpoint
-            (Currently not used)
-            """
-            base_url = self.get_config().get("prometheus_endpoint", PROM_BASE_URL).rstrip("/")
+    def get_prom_metrics(self):
+        """
+        Get metrics known to Prometheus's endpoint
+        (Currently not used)
+        """
+        base_url = self.get_config().get("prometheus_endpoint", PROM_BASE_URL).rstrip("/")
 
-            url = "%s%slabel/__name__/values" % (base_url, PROM_API_PATH)
+        url = "%s%slabel/__name__/values" % (base_url, PROM_API_PATH)
 
-            self.debug("Getting url: ", url)
-            r = requests.get(url)
+        self.debug("Getting url: ", url)
+        r = requests.get(url)
 
-            assert r.status_code == 200, "Prometheus server returned http code: "
-            + str(r.status_code)
+        assert r.status_code == 200, "Prometheus server returned http code: " + str(r.status_code)
 
         try:
             data = r.json()
@@ -107,12 +106,8 @@ class Prom(Measure):
 
         self.debug("Got reponse data: ", data)
 
-        assert (
-                "status" in data and data["status"] == "success"
-        ), "Prometheus server did not return status success"
-
+        assert ("status" in data and data["status"] == "success"), "Prometheus server did not return status success"
         assert "data" in data, "Prometheus server did not return data in output"
-
         assert len(data["data"]) > 0, "Prometheus server returned no metrics"
 
         known_metrics = data["data"]
@@ -170,10 +165,12 @@ class Prom(Measure):
                         'Input configuration for metric "%s" has invalid query'
                         % (metric_name)
                     )
+                
+                period = cfg["metrics"][metric_name].get("period", 60)
 
                 # Query metric to make sure it exists
                 try:
-                    m_values = self._query_prom(base_url, metric_query, start, end)
+                    m_values = self._query_prom(base_url, metric_query, start, end, period)
                     self.debug(
                         "Initial value for metric %s: %s" % (metric_query, m_values)
                     )
@@ -226,14 +223,15 @@ class Prom(Measure):
         super().print_progress(message, msg_index, stage, stageprogress)
 
     # helper
-    def _query_prom(self, base_url, metric_query, start, end):
+    def _query_prom(self, base_url, metric_query, start, end, period=60):
 
-        url = "%s%squery_range?query=%s&start=%s&end=%s&step=60" % (
+        url = "%s%squery_range?query=%s&start=%s&end=%s&step=%i" % (
             base_url,
             PROM_API_PATH,
             metric_query,
             start,
             end,
+            period
         )
 
         self.debug("Getting url: ", url)
@@ -250,16 +248,14 @@ class Prom(Measure):
 
         self.debug("Got response data: ", data)
 
-        assert (
-                "status" in data and data["status"] == "success"
-        ), "Prometheus server did not return status success"
+        assert ("status" in data and data["status"] == "success"), "Prometheus server did not return status success"
 
         insts = []
         for i in data["data"]["result"]:
             metric = i["metric"].copy()
             if "__name__" in metric:
                 del metric["__name__"]
-            id = "   ".join(
+            metric_id = "   ".join(
                 map(lambda m: ":".join(m), sorted(metric.items(), key=lambda m: m[0]))
             )
             # values = map(
@@ -277,7 +273,7 @@ class Prom(Measure):
                 except ValueError:
                     continue
                 values.append((item[0], d))
-            insts.append(dict(id=id, data=list(values)))
+            insts.append(dict(id=metric_id, data=list(values)))
 
         if not insts:
             return []
