@@ -137,6 +137,11 @@ class Prom(Measure):
     def measure(self):
         cfg = self.get_config()
 
+        # execute pre_cmd, if any
+        pre_cmd = cfg.get('pre_cmd')  
+        if pre_cmd:
+            self._run_command(pre_cmd, pre=True)
+
         # get Prometheus API URL with no trailing '/'
         base_url = cfg.get("prometheus_endpoint", PROM_BASE_URL).rstrip("/")
 
